@@ -1,0 +1,125 @@
+[tool.poetry]
+name = "nycyellowtaxi-datalake"
+version = "0.1.0"
+description = "NYC Yellow Taxi Data Lake Infrastructure and Analytics"
+authors = ["Data Engineering Team <data@company.com>"]
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+boto3 = "^1.34.0"
+pandas = "^2.1.0"
+requests = "^2.31.0"
+psycopg2-binary = "^2.9.0"
+sqlalchemy = "^2.0.0"
+pydantic = "^2.5.0"
+python-json-logger = "^2.0.0"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.0.0"
+pytest = "^8.0.0"
+isort = "^5.13.0"
+flake8 = "^7.0.0"
+mypy = "^1.8.0"
+bandit = "^1.7.0"
+pytest-cov = "^4.1.0"
+pytest-mock = "^3.12.0"
+moto = "^4.2.0"
+
+[tool.poetry.group.lambda.dependencies]
+# Lambda-specific lightweight dependencies
+boto3 = "^1.34.0"
+pandas = "^2.1.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+# Tool configurations
+[tool.black]
+line-length = 88
+target-version = ['py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["src"]
+known_third_party = ["boto3", "pandas", "pytest"]
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"]
+exclude = [
+    ".git",
+    "__pycache__",
+    "dist",
+    "build",
+    "*.egg-info",
+    ".venv",
+    "venv",
+]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.bandit]
+exclude_dirs = ["tests", "venv", ".venv"]
+skips = ["B101", "B601"]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = ["tests"]
+filterwarnings = [
+    "error",
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/.venv/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]

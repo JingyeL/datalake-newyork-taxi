@@ -1,0 +1,118 @@
+name: Terraform Infrastructure
+
+on:
+  push:
+    paths:
+      - "infra/**"
+    branches: [main, develop]
+  pull_request:
+    paths:
+      - "infra/**"
+    branches: [main]
+
+env:
+  TERRAFORM_VERSION: "1.5.7"
+  AWS_REGION: "eu-west-1"
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Format Check
+        run: |
+          cd infra
+          terraform fmt -check -recursive -diff
+
+      - name: Terraform Init
+        run: |
+          cd infra/envs/${{ matrix.environment }}
+          terraform init
+
+      - name: Terraform Validate
+        run: |
+          cd infra/envs/${{ matrix.environment }}
+          terraform validate
+
+      - name: Terraform Plan
+        run: |
+          cd infra/envs/${{ matrix.environment }}
+          terraform plan -detailed-exitcode -no-color -out=${{ matrix.environment }}.tfplan
+
+      - name: Save Plan Output
+        run: |
+          cd infra/envs/${{ matrix.environment }}
+          terraform show -no-color ${{ matrix.environment }}.tfplan > ${{ matrix.environment }}-plan.txt
+
+      - name: Upload Plan
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan-${{ matrix.environment }}
+          path: |
+            infra/envs/${{ matrix.environment }}/${{ matrix.environment }}.tfplan
+            infra/envs/${{ matrix.environment }}/${{ matrix.environment }}-plan.txt
+
+  terraform-security:
+    name: Terraform Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: infra/
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: infra/
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+
+      - name: Upload Checkov results to GitHub
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
+
+  terraform-docs:
+    name: Update Terraform Documentation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Render terraform docs inside the README.md
+        uses: terraform-docs/gh-actions@v1.0.0
+        with:
+          working-dir: infra/modules/s3-datalake,infra/modules/glue-catalog,infra/modules/processing
+          output-file: README.md
+          output-method: inject
+          git-push: true

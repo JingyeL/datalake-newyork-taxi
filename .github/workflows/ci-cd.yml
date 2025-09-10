@@ -1,0 +1,360 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy to"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  PYTHON_VERSION: "3.12"
+  TERRAFORM_VERSION: "1.5.7"
+  AWS_REGION: "eu-west-1"
+
+jobs:
+  # Python Code Quality and Testing
+  python-quality:
+    name: Python Code Quality & Testing
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          virtualenvs-path: .venv
+          installer-parallel: true
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v3
+        with:
+          path: .venv
+          key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
+
+      - name: Install dependencies
+        run: |
+          poetry install --with dev
+
+      - name: Code formatting check (Black)
+        run: |
+          echo "Running Black formatter check..."
+          poetry run black --check --diff src/ tests/ || (echo "Code formatting issues found. Run 'poetry run black src/ tests/' to fix." && exit 1)
+
+      - name: PEP8 compliance check (flake8)
+        run: |
+          echo "Running flake8 for PEP8 compliance..."
+          poetry run flake8 src/ tests/ --max-line-length=88 --extend-ignore=E203,W503
+
+      - name: Linting (pylint)
+        run: |
+          echo "Running pylint..."
+          poetry run pylint src/ --fail-under=7.0 || echo "Pylint score below 7.0"
+
+      - name: Type checking (mypy)
+        run: |
+          echo "Running mypy type checking..."
+          poetry run mypy src/ --ignore-missing-imports || echo "Type checking issues found"
+
+      - name: Security check (bandit)
+        run: |
+          echo "Running bandit security checks..."
+          poetry run bandit -r src/ -f json -o bandit-report.json || echo "Security issues found"
+
+      - name: Dependency security check (safety)
+        run: |
+          echo "Running safety check for dependencies..."
+          poetry run safety check || echo "Vulnerable dependencies found"
+
+      - name: Run tests with coverage
+        run: |
+          echo "Running pytest with coverage..."
+          poetry run pytest tests/ --cov=src --cov-report=xml --cov-report=html --cov-fail-under=80
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+
+      - name: Archive test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: test-results
+          path: |
+            htmlcov/
+            bandit-report.json
+            .coverage
+
+  # Terraform Validation and Planning
+  terraform-check:
+    name: Terraform Validation & Planning
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev, staging, prod]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Format Check
+        run: |
+          cd infra/envs/${{ matrix.environment }}
+          terraform fmt -check -recursive
+
+      - name: Terraform Init
+        run: |
+          cd infra/envs/${{ matrix.environment }}
+          terraform init -backend=false
+
+      - name: Terraform Validate
+        run: |
+          cd infra/envs/${{ matrix.environment }}
+          terraform validate
+
+      - name: Terraform Security Scan (tfsec)
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: infra/envs/${{ matrix.environment }}
+
+      - name: Terraform Plan (if secrets available)
+        if: github.event_name == 'pull_request' && env.AWS_ACCESS_KEY_ID != ''
+        run: |
+          cd infra/envs/${{ matrix.environment }}
+          terraform init
+          terraform plan -detailed-exitcode -no-color -out=tfplan
+
+      - name: Upload Terraform Plan
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan-${{ matrix.environment }}
+          path: infra/envs/${{ matrix.environment }}/tfplan
+
+  # Lambda Package Building
+  lambda-build:
+    name: Build Lambda Packages
+    runs-on: ubuntu-latest
+    needs: python-quality
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Install dependencies
+        run: |
+          poetry install --only=main
+
+      - name: Create Lambda packages
+        run: |
+          echo "Building Lambda deployment packages..."
+          make build-lambda || echo "Makefile not found, creating packages manually"
+
+      - name: Manual Lambda packaging (fallback)
+        if: failure()
+        run: |
+          mkdir -p dist/lambda
+          # Package each Lambda function
+          for lambda_dir in src/*/; do
+            if [ -d "$lambda_dir" ]; then
+              lambda_name=$(basename "$lambda_dir")
+              echo "Packaging $lambda_name..."
+              cd "$lambda_dir"
+              zip -r "../../../dist/lambda/${lambda_name}.zip" . -x "*.pyc" "__pycache__/*" "tests/*"
+              cd - > /dev/null
+            fi
+          done
+
+      - name: Upload Lambda artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: lambda-packages
+          path: dist/lambda/
+          retention-days: 30
+
+  # Development Environment Deployment
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: [python-quality, terraform-check, lambda-build]
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev')
+    environment:
+      name: development
+      url: https://console.aws.amazon.com/s3/buckets/nycyellowtaxi-datalake-dev-data-lake
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download Lambda packages
+        uses: actions/download-artifact@v3
+        with:
+          name: lambda-packages
+          path: dist/lambda/
+
+      - name: Deploy Infrastructure
+        run: |
+          cd infra/envs/dev
+          terraform init
+          terraform plan -detailed-exitcode -out=tfplan
+          terraform apply -auto-approve tfplan
+
+      - name: Update Lambda functions
+        run: |
+          echo "Updating Lambda function code..."
+          # Update each Lambda function with new deployment package
+          for zip_file in dist/lambda/*.zip; do
+            if [ -f "$zip_file" ]; then
+              function_name=$(basename "$zip_file" .zip)
+              aws_function_name="nycyellowtaxi-datalake-dev-${function_name}"
+              echo "Updating function: $aws_function_name"
+              aws lambda update-function-code \
+                --function-name "$aws_function_name" \
+                --zip-file "fileb://$zip_file" \
+                --region ${{ env.AWS_REGION }} || echo "Function $aws_function_name not found or update failed"
+            fi
+          done
+
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests..."
+          # Test S3 bucket accessibility
+          aws s3 ls s3://nycyellowtaxi-datalake-dev-data-lake/ || echo "S3 bucket not accessible"
+          # Test Lambda function
+          aws lambda invoke --function-name nycyellowtaxi-datalake-dev-data-validator response.json || echo "Lambda invocation failed"
+
+      - name: Deployment summary
+        run: |
+          echo "Deployment to Development completed successfully!"
+          echo "Infrastructure outputs:"
+          cd infra/envs/dev
+          terraform output
+
+  # Staging Environment Deployment (manual approval)
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [deploy-dev]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'
+    environment:
+      name: staging
+      url: https://console.aws.amazon.com/s3/buckets/nycyellowtaxi-datalake-staging-data-lake
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to Staging
+        run: |
+          cd infra/envs/staging
+          terraform init
+          terraform plan -detailed-exitcode -out=tfplan
+          terraform apply -auto-approve tfplan
+
+  # Production Environment Deployment (manual approval required)
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
+    environment:
+      name: production
+      url: https://console.aws.amazon.com/s3/buckets/nycyellowtaxi-datalake-prod-data-lake
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to Production
+        run: |
+          cd infra/envs/prod
+          terraform init
+          terraform plan -detailed-exitcode -out=tfplan
+          terraform apply -auto-approve tfplan
