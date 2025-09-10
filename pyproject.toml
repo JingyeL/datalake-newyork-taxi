@@ -3,7 +3,7 @@ name = "nycyellowtaxi-datalake"
 version = "0.1.0"
 description = "NYC Yellow Taxi Data Lake Infrastructure and Analytics"
 authors = ["Data Engineering Team <data@company.com>"]
-packages = [{include = "src"}]
+packages = [{ include = "src" }]
 
 [tool.poetry.dependencies]
 python = "^3.9"
@@ -89,11 +89,7 @@ skips = ["B101", "B601"]
 minversion = "6.0"
 addopts = "-ra -q --strict-markers --strict-config"
 testpaths = ["tests"]
-filterwarnings = [
-    "error",
-    "ignore::UserWarning",
-    "ignore::DeprecationWarning",
-]
+filterwarnings = ["error", "ignore::UserWarning", "ignore::DeprecationWarning"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
@@ -102,13 +98,7 @@ markers = [
 
 [tool.coverage.run]
 source = ["src"]
-omit = [
-    "*/tests/*",
-    "*/test_*",
-    "*/__pycache__/*",
-    "*/venv/*",
-    "*/.venv/*",
-]
+omit = ["*/tests/*", "*/test_*", "*/__pycache__/*", "*/venv/*", "*/.venv/*"]
 
 [tool.coverage.report]
 exclude_lines = [

@@ -26,26 +26,14 @@ def sample_taxi_data():
 
 
 @pytest.fixture
-def mock_aws_credentials():
-    """Mock AWS credentials for testing"""
-    import os
-
-    os.environ["AWS_ACCESS_KEY_ID"] = "testing"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
-    os.environ["AWS_SECURITY_TOKEN"] = "testing"
-    os.environ["AWS_SESSION_TOKEN"] = "testing"
-    os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
-
-
-@pytest.fixture
-def s3_client(mock_aws_credentials):
+def s3_client():
     """Create mock S3 client"""
     with mock_s3():
         yield boto3.client("s3", region_name="us-east-1")
 
 
 @pytest.fixture
-def glue_client(mock_aws_credentials):
+def glue_client():
     """Create mock Glue client"""
     with mock_glue():
         yield boto3.client("glue", region_name="us-east-1")

@@ -60,7 +60,7 @@ test-watch: ## Run tests in watch mode
 build-lambda: clean-lambda ## Build all Lambda deployment packages
 	@echo "Building Lambda deployment packages..."
 	mkdir -p $(DIST_DIR)/lambda
-	
+
 	# Find all Lambda functions and package them
 	@for lambda_func in $$(find $(LAMBDA_DIR) -name "*.py" -exec dirname {} \; | sort | uniq); do \
 		if [ -f "$$lambda_func/requirements.txt" ]; then \

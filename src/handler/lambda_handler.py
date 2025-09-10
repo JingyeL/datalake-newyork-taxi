@@ -8,5 +8,6 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     pass
