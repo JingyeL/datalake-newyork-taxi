@@ -44,3 +44,7 @@ Use Iceberg APIs to
 
 ## Data Sources
 https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
+
+
+## Architecture Diagram - historical load
+![Architecture Diagram](docs/nyc-taxi-lakehouse-architecture.png)
